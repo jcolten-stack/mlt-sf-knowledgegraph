@@ -1,0 +1,544 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Salesforce Object Knowledge Graph</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+  :root{
+    /* ---- Palette (light-gray canvas) ---- */
+    --bg:#e8eaed;              /* light gray canvas (SVG shows this through) */
+    --header:#dde1e6;
+    --panel:#ffffff;           /* white card for toolbar / detail */
+    --panel-2:#eef1f5;         /* metric chips */
+    --ink:#1e2731;
+    --ink-soft:#4a5563;
+    --ink-muted:#77818f;
+    --rule:#d3dae2;
+    --label:#1e2731;           /* dark node labels on light gray */
+    --tip-bg:#2b323c;
+
+    /* node fills */
+    --c-object:#074E7D;        /* dark blue  -> layer:object */
+    --c-core:#50B948;          /* green      -> the single core node */
+    --c-source:#452059;        /* dark purple-> layer:source (external systems) */
+    --c-stub:#8a93a1;          /* muted slate-> referenced-only stub */
+
+    /* link colors by type */
+    --l-master:#c1121f;        /* master  (kept for reference; currently unused) */
+    --l-lookup:#8a94a2;        /* lookup  (slate gray, reads on light) */
+    --l-source:#d68f2f;        /* source feed (amber) */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Avenir Next","Avenir","Segoe UI",Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+
+  /* ---------- Layout ---------- */
+  header{
+    padding:14px 22px 12px;
+    border-bottom:1px solid var(--rule);
+    background:var(--header);
+    display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap;
+  }
+  header h1{
+    margin:0;font-size:23px;font-weight:600;letter-spacing:.2px;line-height:1.1;color:var(--ink);
+  }
+  header .sub{
+    font-size:12.5px;color:#66707d;margin-top:3px;letter-spacing:.2px;
+  }
+  .stats{display:flex;gap:22px;}
+  .stat{text-align:right;}
+  .stat b{display:block;font-size:19px;font-weight:600;color:var(--ink);}
+  .stat span{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink-muted);}
+
+  #wrap{position:relative;width:100%;height:calc(100% - 64px);}
+  svg{display:block;width:100%;height:100%;cursor:grab;}
+  svg:active{cursor:grabbing;}
+
+  /* ---------- Toolbar ---------- */
+  .toolbar{
+    position:absolute;top:14px;left:14px;z-index:5;
+    background:var(--panel);border:1px solid var(--rule);border-radius:12px;
+    padding:12px 14px;width:238px;
+    box-shadow:0 8px 26px rgba(0,0,0,.28);
+  }
+  .toolbar h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-muted);margin:0 0 8px;font-weight:700;}
+  .toolbar h2:not(:first-child){margin-top:14px;}
+  #search{
+    width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;
+    font-size:13px;background:#fff;color:var(--ink);font-family:inherit;
+  }
+  #search:focus{outline:none;border-color:var(--c-object);}
+  .legend-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-soft);margin:5px 0;cursor:default;}
+  .swatch{width:14px;height:14px;border-radius:50%;flex:none;border:2px solid rgba(0,0,0,.12);}
+  .lg-line{width:20px;height:0;flex:none;}
+  .btns{display:flex;gap:7px;margin-top:12px;}
+  button{
+    flex:1;padding:7px 8px;border:1px solid var(--rule);border-radius:8px;background:#fff;
+    color:var(--ink-soft);font-size:12px;font-family:inherit;cursor:pointer;transition:.15s;
+  }
+  button:hover{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .hint{font-size:11px;color:var(--ink-muted);line-height:1.45;margin-top:12px;border-top:1px dashed var(--rule);padding-top:10px;}
+
+  /* ---------- Detail panel ---------- */
+  #detail{
+    position:absolute;top:14px;right:14px;z-index:5;width:262px;
+    background:var(--panel);border:1px solid var(--rule);border-radius:12px;
+    padding:0;box-shadow:0 8px 26px rgba(0,0,0,.28);
+    transform:translateX(calc(100% + 24px));transition:transform .28s cubic-bezier(.2,.8,.2,1);
+    max-height:calc(100% - 28px);overflow:auto;
+  }
+  #detail.open{transform:translateX(0);}
+  #detail .dhead{padding:14px 16px 12px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--panel);}
+  #detail .dhead .layer-tag{font-size:9.5px;text-transform:uppercase;letter-spacing:.11em;font-weight:700;padding:2px 7px;border-radius:20px;color:#fff;display:inline-block;margin-bottom:7px;}
+  #detail h3{margin:0;font-size:17px;font-weight:600;}
+  #detail .api{font-size:11.5px;color:var(--ink-muted);font-family:ui-monospace,Menlo,Consolas,monospace;margin-top:3px;word-break:break-all;}
+  #detail .metrics{display:flex;gap:8px;padding:12px 16px 4px;}
+  #detail .metric{flex:1;background:var(--panel-2);border-radius:8px;padding:8px 9px;}
+  #detail .metric b{display:block;font-size:16px;font-weight:600;color:var(--ink);}
+  #detail .metric span{font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-muted);}
+  #detail .note{padding:6px 16px 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;}
+  #detail .rel{padding:2px 16px 16px;}
+  #detail .rel h4{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-muted);margin:12px 0 6px;}
+  #detail .rel-item{font-size:12px;color:var(--ink-soft);padding:5px 0;border-top:1px solid var(--rule);display:flex;align-items:center;gap:7px;cursor:pointer;}
+  #detail .rel-item:hover{color:var(--c-object);}
+  #detail .rel-item .fld{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;color:var(--ink-muted);margin-left:auto;}
+  #detail .rel-item .dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  #dclose{position:absolute;top:12px;right:12px;width:24px;height:24px;line-height:22px;text-align:center;border-radius:50%;border:1px solid var(--rule);background:#fff;cursor:pointer;font-size:14px;color:var(--ink-muted);padding:0;flex:none;}
+  #dclose:hover{background:var(--ink);color:#fff;}
+
+  /* ---------- Graph elements ---------- */
+  .link{stroke-linecap:round;transition:opacity .2s;}
+  .link-label{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:8.5px;fill:#5c6672;pointer-events:none;opacity:0;transition:opacity .2s;}
+  .node circle{cursor:pointer;stroke:#ffffff;stroke-width:2px;transition:opacity .2s;}
+  .node text{font-size:11px;font-weight:600;fill:var(--label);pointer-events:none;paint-order:stroke;stroke:var(--bg);stroke-width:3.5px;transition:opacity .2s;}
+  .faded{opacity:.08 !important;}
+
+  /* ---------- Tooltip ---------- */
+  #tip{
+    position:absolute;z-index:20;pointer-events:none;opacity:0;transition:opacity .12s;
+    background:var(--tip-bg);color:#fff;padding:8px 11px;border-radius:8px;font-size:11.5px;
+    max-width:220px;line-height:1.4;border:1px solid rgba(255,255,255,.08);
+    box-shadow:0 6px 18px rgba(0,0,0,.4);
+  }
+  #tip b{font-size:13px;}
+  #tip .k{color:#9aa4b2;}
+  @media (max-width:720px){
+    .toolbar{width:200px;} #detail{width:220px;}
+  }
+</style>
+</head>
+<body data-palette="#074E7D,#50B948,#452059">
+
+<header>
+  <div>
+    <h1>Salesforce Object Knowledge Graph</h1>
+    <div class="sub" id="subline">Objects, relationships &amp; external source feeds · drag to reposition · scroll to zoom · click a node for detail</div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="s-nodes">0</b><span>Nodes</span></div>
+    <div class="stat"><b id="s-links">0</b><span>Relationships</span></div>
+  </div>
+</header>
+
+<div id="wrap">
+  <div class="toolbar">
+    <h2>Find node</h2>
+    <input id="search" type="text" placeholder="Search by name or API…" autocomplete="off">
+
+    <h2>Node layers</h2>
+    <div class="legend-row"><span class="swatch" style="background:var(--c-core)"></span> Core object</div>
+    <div class="legend-row"><span class="swatch" style="background:var(--c-object)"></span> Object (from a sheet row)</div>
+    <div class="legend-row"><span class="swatch" style="background:var(--c-source)"></span> External source system</div>
+
+    <div class="btns">
+      <button id="reset">Reset view</button>
+      <button id="freeze">Freeze</button>
+    </div>
+    <div class="hint">Node size = record count (sources are fixed-size). Arrows point child → parent, or in the direction data flows for feeds. Field names &amp; types are inferred — edit the arrays up top to correct.</div>
+  </div>
+
+  <div id="detail">
+    <button id="dclose">×</button>
+    <div class="dhead">
+      <span class="layer-tag" id="d-tag">Object</span>
+      <h3 id="d-label">—</h3>
+      <div class="api" id="d-api">—</div>
+    </div>
+    <div class="metrics">
+      <div class="metric"><b id="d-count">—</b><span>Records</span></div>
+      <div class="metric"><b id="d-fields">—</b><span>Custom fields</span></div>
+    </div>
+    <div class="note" id="d-note"></div>
+    <div class="rel" id="d-rel"></div>
+  </div>
+
+  <div id="tip"></div>
+</div>
+
+<script>
+/* ============================================================================
+   EDITABLE DATA — extend these two arrays to grow the graph.
+   ----------------------------------------------------------------------------
+   NODES include:
+     • the 10 objects that have their own "Link to" list (sheet rows 2–11),
+     • every object NAMED inside those "Link to" cells (resolved to real rows),
+     • external SOURCE systems (layer:"source") that push/pull data to Salesforce.
+
+   Previously-unresolved names are now mapped to real API objects:
+     Interests -> Partner_Interest__c · Cohort Group -> Contact_Group__c ·
+     Event Participation -> Constituent_Attendees__c  ("Payments" was removed).
+
+   NODE shape:
+     id     : short unique key used by LINKS
+     label  : display name
+     layer  : "source" | "object"   ("source" = an external system, purple)
+     core   : true on EXACTLY ONE node (the hub). Contact is the hub here.
+     api    : Salesforce API name — null for source systems
+     count  : approximate record count — null for source systems
+     fields : # of custom fields — null for source systems
+     tools  : []  — left empty on purpose; tag "Salesforce" / "Tableau" later
+     stub   : (optional) true for a placeholder node with no data
+     note   : short human description
+   ========================================================================== */
+const NODES = [
+  /* --- the 10 objects that HAVE their own "Link to" list --- */
+  { id:"contact",              label:"Contact",              layer:"object", core:true,  api:"Contact",                    count:177000, fields:490, tools:[], note:"Central hub — the person record touched by nearly every other object." },
+  { id:"account",              label:"Account (Orgs)",       layer:"object", core:false, api:"Account",                    count:171000, fields:196, tools:[], note:"Organizations, employers and partner companies." },
+  { id:"account_affiliation",  label:"Account Affiliation",  layer:"object", core:false, api:"Account_Affiliation__c",     count:250000, fields:107, tools:[], note:"Junction linking Contacts to Organizations (many-to-many)." },
+  { id:"external_application", label:"External Application", layer:"object", core:false, api:"External_Application__c",    count:188000, fields:143, tools:[], note:"External / partner-sourced application records." },
+  { id:"application_upload",   label:"Application Upload",   layer:"object", core:false, api:"Application_Upload__c",      count:83000,  fields:530, tools:[], note:"Uploaded application documents and materials." },
+  { id:"program_application",  label:"Program Application",  layer:"object", core:false, api:"Program_Application__c",     count:83000,  fields:440, tools:[], note:"Applications submitted to an MLT program." },
+  { id:"program_enrollment",   label:"Program Enrollment",   layer:"object", core:false, api:"MLT_Program_Enrollment__c",  count:39000,  fields:538, tools:[], note:"A fellow's enrollment in a program (widest object by field count)." },
+  { id:"opportunity",          label:"Opportunity",          layer:"object", core:false, api:"Opportunity",                count:53000,  fields:120, tools:[], note:"Revenue / opportunity records tied to organizations." },
+  { id:"lead",                 label:"Lead",                 layer:"object", core:false, api:"Lead",                       count:50000,  fields:94,  tools:[], note:"Inbound leads prior to conversion." },
+  { id:"mlt_program",          label:"MLT Program",          layer:"object", core:false, api:"MLT_Program__c",             count:326,    fields:121, tools:[], note:"Program definitions — small configuration object referenced widely." },
+
+  /* --- objects that appear only inside "Link to" cells but ARE real sheet rows --- */
+  { id:"user",                 label:"User",                 layer:"object", core:false, api:"User",                       count:1900,   fields:25,  tools:[], note:"Internal users / record owners." },
+  { id:"section_enrollment",   label:"Section Enrollment",   layer:"object", core:false, api:"Section_Enrollment__c",      count:79000,  fields:11,  tools:[], note:"A fellow's enrollment in a course section." },
+  { id:"course_enrollment",    label:"Course Enrollment",    layer:"object", core:false, api:"Course_Enrollment__c",       count:25000,  fields:7,   tools:[], note:"A fellow's enrollment in a course." },
+  { id:"test_score",           label:"Test Score",           layer:"object", core:false, api:"Test_Score__c",              count:38000,  fields:43,  tools:[], note:"Standardized test scores linked to a contact." },
+  { id:"contact_profile",      label:"Contact Profile",      layer:"object", core:false, api:"Contact_Profile__c",         count:12000,  fields:74,  tools:[], note:"Extended profile attributes for a contact." },
+  { id:"campaign",             label:"Campaign",             layer:"object", core:false, api:"Campaign",                   count:2000,   fields:21,  tools:[], note:"Marketing campaigns (contacts join via CampaignMember)." },
+  { id:"attribute_snapshot",   label:"Attribute Snapshot",   layer:"object", core:false, api:"Attribute_Snapshot__c",      count:66500,  fields:7,   tools:[], note:"Point-in-time attribute captures for a contact." },
+  { id:"survey_upload",        label:"Survey Upload",        layer:"object", core:false, api:"Survey_Upload__c",           count:39000,  fields:90,  tools:[], note:"Uploaded survey responses linked to a contact." },
+  { id:"testimonial",          label:"Testimonial",          layer:"object", core:false, api:"Testimonial__c",             count:3300,   fields:18,  tools:[], note:"Fellow / partner testimonials." },
+  { id:"contract",             label:"Contract",             layer:"object", core:false, api:"Contract",                   count:580,    fields:52,  tools:[], note:"Contracts tied to accounts and opportunities." },
+  { id:"partner_service",      label:"Partner Service",      layer:"object", core:false, api:"Partner_Service__c",         count:1300,   fields:57,  tools:[], note:"Services provided to / by partner organizations." },
+  { id:"recruiting_profile",   label:"Recruiting Profile",   layer:"object", core:false, api:"Partner_Recruiting_Profile__c",count:187,  fields:47,  tools:[], note:"Partner recruiting profile record." },
+  { id:"course_section_mapping",label:"Course Section Mapping",layer:"object",core:false, api:"Course_Section_Mapping__c",  count:1500,   fields:7,   tools:[], note:"Maps courses to sections within a program." },
+  { id:"event",                label:"Event",                layer:"object", core:false, api:"Event__c",                   count:1100,   fields:64,  tools:[], note:"MLT events (mapped from “MLT Events” reference)." },
+  { id:"interests",            label:"Interests",            layer:"object", core:false, api:"Partner_Interest__c",        count:1248000,fields:10,  tools:[], note:"Partner interest records — very high volume; links partners/contacts to interests." },
+  { id:"cohort_group",         label:"Cohort Group",         layer:"object", core:false, api:"Contact_Group__c",           count:1390,   fields:9,   tools:[], note:"Cohort / contact grouping within a program." },
+  { id:"event_participation",  label:"Event Participation",  layer:"object", core:false, api:"Constituent_Attendees__c",   count:17000,  fields:69,  tools:[], note:"Constituent attendee / event participation records." },
+
+  /* --- external SOURCE systems (layer:"source") — no SF record/field data --- */
+  { id:"smapply",              label:"SMApply",              layer:"source", core:false, api:null, count:null, fields:null, tools:[], note:"Application platform. Pushes to Application Upload & Program Application; pulls Contact & Account." },
+  { id:"careerlink",           label:"CareerLink",           layer:"source", core:false, api:null, count:null, fields:null, tools:[], note:"Pulls Contact & Account; pushes to External Application (integration currently broken)." },
+  { id:"avature",              label:"Avature",              layer:"source", core:false, api:null, count:null, fields:null, tools:[], note:"Recruiting platform. Pushes candidate data to Contact." }
+];
+
+/* ----------------------------------------------------------------------------
+   LINK shape:
+     source : node id where the arrow STARTS
+     target : node id where the arrow ENDS
+     type   : "master" | "lookup" | "source"
+              - lookup/master : SF relationship, arrow = child → parent
+              - source        : external feed, arrow = direction data flows
+     label  : API field name (lookup/master) or "push"/"pull" (source feeds)
+     broken : (optional) true renders the line dashed (feed not syncing)
+   -------------------------------------------------------------------------- */
+const LINKS = [
+  /* --- edges among the 10 linking objects --- */
+  { source:"contact",              target:"account",             type:"lookup", label:"AccountId" },
+  { source:"account_affiliation",  target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"account_affiliation",  target:"account",             type:"lookup", label:"Organization__c" },
+  { source:"program_enrollment",   target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"program_enrollment",   target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"program_enrollment",   target:"external_application",type:"lookup", label:"External_Application__c" },
+  { source:"application_upload",   target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"application_upload",   target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"application_upload",   target:"program_application", type:"lookup", label:"Program_Application__c" },
+  { source:"program_application",  target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"program_application",  target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"program_application",  target:"program_enrollment",  type:"lookup", label:"Program_Enrollment__c" },
+  { source:"external_application", target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"external_application", target:"account",             type:"lookup", label:"Organization__c" },
+  { source:"external_application", target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"opportunity",          target:"account",             type:"lookup", label:"AccountId" },
+  { source:"opportunity",          target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"lead",                 target:"contact",             type:"lookup", label:"Contact__c" },
+
+  /* owner (User) relationships */
+  { source:"program_enrollment",   target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"account",              target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"mlt_program",          target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"opportunity",          target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"account_affiliation",  target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"lead",                 target:"user",                type:"lookup", label:"OwnerId" },
+  { source:"external_application", target:"user",                type:"lookup", label:"OwnerId" },
+
+  /* Program Enrollment references + its children */
+  { source:"program_enrollment",   target:"interests",           type:"lookup", label:"Interest__c" },
+  { source:"program_enrollment",   target:"cohort_group",        type:"lookup", label:"Cohort_Group__c" },
+  { source:"section_enrollment",   target:"program_enrollment",  type:"lookup", label:"Program_Enrollment__c" },
+  { source:"course_enrollment",    target:"program_enrollment",  type:"lookup", label:"Program_Enrollment__c" },
+
+  /* Contact's related children (FK on the child, points to Contact) */
+  { source:"test_score",           target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"contact_profile",      target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"attribute_snapshot",   target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"survey_upload",        target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"testimonial",          target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"section_enrollment",   target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"course_enrollment",    target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"opportunity",          target:"contact",             type:"lookup", label:"OpportunityContactRole" },
+  { source:"contact",              target:"campaign",            type:"lookup", label:"CampaignMember" },
+
+  /* Account's related objects */
+  { source:"contract",             target:"account",             type:"lookup", label:"AccountId" },
+  { source:"partner_service",      target:"account",             type:"lookup", label:"Organization__c" },
+  { source:"recruiting_profile",   target:"account",             type:"lookup", label:"Organization__c" },
+  { source:"event_participation",  target:"account",             type:"lookup", label:"Organization__c" },
+  { source:"account",              target:"interests",           type:"lookup", label:"Interest__c" },
+
+  /* Event Participation (Constituent_Attendees__c) parents */
+  { source:"event_participation",  target:"event",               type:"lookup", label:"Event__c" },
+  { source:"event_participation",  target:"program_enrollment",  type:"lookup", label:"Program_Enrollment__c" },
+
+  /* MLT Program's related objects */
+  { source:"cohort_group",         target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"event",                target:"mlt_program",         type:"lookup", label:"Program__c" },
+  { source:"course_section_mapping",target:"mlt_program",        type:"lookup", label:"Program__c" },
+  { source:"mlt_program",          target:"interests",           type:"lookup", label:"Interest__c" },
+
+  /* Opportunity's related objects */
+  { source:"opportunity",          target:"contract",            type:"lookup", label:"ContractId" },
+  { source:"opportunity",          target:"partner_service",     type:"lookup", label:"Partner_Service__c" },
+
+  /* --- external source feeds (arrow = data-flow direction) --- */
+  { source:"smapply",              target:"application_upload",  type:"source", label:"push" },
+  { source:"smapply",              target:"program_application", type:"source", label:"push" },
+  { source:"contact",              target:"smapply",             type:"source", label:"pull" },
+  { source:"account",              target:"smapply",             type:"source", label:"pull" },
+  { source:"contact",              target:"careerlink",          type:"source", label:"pull" },
+  { source:"account",              target:"careerlink",          type:"source", label:"pull" },
+  { source:"careerlink",           target:"external_application",type:"source", label:"push · broken", broken:true },
+  { source:"avature",              target:"contact",             type:"source", label:"push" }
+];
+
+/* ========================= RENDER (D3 force-directed) ====================== */
+const LINK_COLOR  = { master:"#c1121f", lookup:"#8a94a2", source:"#d68f2f" };
+const nodeColor = n => n.stub ? "var(--c-stub)" : (n.core ? "var(--c-core)" : (n.layer==="source" ? "var(--c-source)" : "var(--c-object)"));
+
+const wrap = document.getElementById("wrap");
+let W = wrap.clientWidth, H = wrap.clientHeight;
+
+const svg = d3.select("#wrap").append("svg").attr("viewBox",[0,0,W,H]);
+const root = svg.append("g");            // zoomable container
+
+// arrow markers, one per link type (so color matches the line)
+const defs = svg.append("defs");
+["master","lookup","source"].forEach(t=>{
+  defs.append("marker")
+    .attr("id","arw-"+t).attr("viewBox","0 -5 10 10").attr("refX",10).attr("refY",0)
+    .attr("markerWidth",6).attr("markerHeight",6).attr("orient","auto")
+    .append("path").attr("d","M0,-5L10,0L0,5").attr("fill",LINK_COLOR[t]);
+});
+
+// radius: sources fixed; objects sqrt-scaled by record count; null -> min
+const counted = NODES.filter(n=>n.count!=null);
+const rScale = d3.scaleSqrt().domain(d3.extent(counted, d=>d.count)).range([12, 44]);
+const radius = d => d.layer==="source" ? 15 : (d.count==null ? 11 : Math.max(12, rScale(d.count)));
+
+// resolve string ids in LINKS to node refs (D3 mutates these)
+const links = LINKS.map(l=>Object.assign({}, l));
+const nodes = NODES.map(n=>Object.assign({}, n));
+
+const sim = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id(d=>d.id)
+      .distance(l=> l.type==="source" ? 150 : 118)
+      .strength(0.3))
+  .force("charge", d3.forceManyBody().strength(-500))
+  .force("center", d3.forceCenter(W/2, H/2))
+  .force("collide", d3.forceCollide().radius(d=>radius(d)+13))
+  .force("x", d3.forceX(W/2).strength(0.05))
+  .force("y", d3.forceY(H/2).strength(0.05));
+
+// ---- links
+const link = root.append("g").selectAll("line")
+  .data(links).join("line")
+    .attr("class","link")
+    .attr("stroke", d=>LINK_COLOR[d.type])
+    .attr("stroke-width", d=> d.type==="source" ? 2.4 : 1.6)
+    .attr("stroke-dasharray", d=> d.broken ? "6,4" : null)
+    .style("opacity", d=> d.type==="source" ? 0.5 : 1)   /* source feeds at 50% */
+    .attr("marker-end", d=>`url(#arw-${d.type})`);
+
+const linkLabel = root.append("g").selectAll("text")
+  .data(links).join("text")
+    .attr("class","link-label")
+    .text(d=>d.label);
+
+// ---- nodes
+const node = root.append("g").selectAll("g")
+  .data(nodes).join("g")
+    .attr("class","node")
+    .call(d3.drag()
+      .on("start",dragStart).on("drag",dragged).on("end",dragEnd));
+
+node.append("circle")
+  .attr("r", radius)
+  .attr("fill", nodeColor)
+  .attr("stroke-width", d=> d.core ? 3 : 2)
+  .attr("stroke-dasharray", d=> d.stub ? "3,2" : null)
+  .style("fill-opacity", d=> d.stub ? 0.55 : 1);
+
+node.append("text")
+  .attr("text-anchor","middle")
+  .attr("dy", d=> radius(d)+13)
+  .text(d=>d.label);
+
+// adjacency for highlight + detail panel
+const adj = {};
+nodes.forEach(n=> adj[n.id] = new Set([n.id]));
+links.forEach(l=>{ adj[l.source.id].add(l.target.id); adj[l.target.id].add(l.source.id); });
+
+// ---------------- interactions ----------------
+const fmt = d3.format(",");
+const tip = document.getElementById("tip");
+node.on("mouseenter", (e,d)=>{
+    tip.style.opacity=1;
+    const stats = d.layer==="source"
+      ? `<span class="k">External source system</span>`
+      : (d.count==null ? `<span class="k">No record data</span>`
+        : `<span class="k">Records:</span> ${fmt(d.count)} &nbsp;<span class="k">Fields:</span> ${d.fields}`);
+    tip.innerHTML = `<b>${d.label}</b><br><span class="k">${d.api||"(no API name)"}</span><br>${stats}<br>${d.note}`;
+    highlight(d);
+  })
+  .on("mousemove",(e)=>{
+    const r = wrap.getBoundingClientRect();
+    let x = e.clientX - r.left + 14, y = e.clientY - r.top + 14;
+    if(x + 230 > W) x = e.clientX - r.left - 234;
+    tip.style.left = x+"px"; tip.style.top = y+"px";
+  })
+  .on("mouseleave",()=>{ tip.style.opacity=0; if(!selected) clearHighlight(); })
+  .on("click",(e,d)=>{ selected=d.id; showDetail(d); highlight(d); e.stopPropagation(); });
+
+svg.on("click",()=>{ selected=null; clearHighlight(); closeDetail(); });
+
+let selected=null;
+function highlight(d){
+  const keep = adj[d.id];
+  node.classed("faded", n=> !keep.has(n.id));
+  link.classed("faded", l=> !(l.source.id===d.id || l.target.id===d.id))
+      .attr("stroke-width", l=> (l.source.id===d.id||l.target.id===d.id) ? (l.type==="source"?3.2:2.4) : (l.type==="source"?2.4:1.6));
+  linkLabel.style("opacity", l=> (l.source.id===d.id||l.target.id===d.id) ? 1 : 0);
+}
+function clearHighlight(){
+  node.classed("faded",false);
+  link.classed("faded",false).attr("stroke-width", l=> l.type==="source"?2.4:1.6);
+  linkLabel.style("opacity",0);
+}
+
+// ---------------- detail panel ----------------
+const detail = document.getElementById("detail");
+document.getElementById("dclose").onclick = (e)=>{ e.stopPropagation(); selected=null; clearHighlight(); closeDetail(); };
+function closeDetail(){ detail.classList.remove("open"); }
+function showDetail(d){
+  detail.classList.add("open");
+  const tag = document.getElementById("d-tag");
+  tag.textContent = d.stub ? "Referenced only" : (d.core ? "Core object" : (d.layer==="source" ? "External source" : "Object"));
+  tag.style.background = nodeColor(d);
+  document.getElementById("d-label").textContent = d.label;
+  document.getElementById("d-api").textContent = d.api || (d.layer==="source" ? "external system" : "— (not in sheet)");
+  document.getElementById("d-count").textContent = d.count==null ? "n/a" : fmt(d.count);
+  document.getElementById("d-fields").textContent = d.fields==null ? "n/a" : d.fields;
+  document.getElementById("d-note").textContent = d.note;
+
+  const out = links.filter(l=>l.source.id===d.id);
+  const inc = links.filter(l=>l.target.id===d.id);
+  const rel = document.getElementById("d-rel");
+  const row = (l, other, dir)=>`<div class="rel-item" data-go="${other.id}">
+      <span class="dot" style="background:${LINK_COLOR[l.type]}"></span>
+      ${dir} <b style="font-weight:600;color:var(--ink)">${other.label}</b>
+      <span class="fld">${l.label}</span></div>`;
+  let html = "";
+  if(out.length){ html += `<h4>${d.layer==="source"?"Feeds out to":"References (this → parent)"}</h4>` + out.map(l=>row(l,l.target,"→")).join(""); }
+  if(inc.length){ html += `<h4>${d.layer==="source"?"Fed from":"Referenced by (child → this)"}</h4>` + inc.map(l=>row(l,l.source,"←")).join(""); }
+  rel.innerHTML = html || `<h4>No relationships</h4>`;
+  rel.querySelectorAll(".rel-item").forEach(el=>{
+    el.onclick = (ev)=>{ ev.stopPropagation(); const t=nodes.find(n=>n.id===el.dataset.go); selected=t.id; showDetail(t); highlight(t); };
+  });
+}
+
+// ---------------- search ----------------
+document.getElementById("search").addEventListener("input", function(){
+  const q = this.value.trim().toLowerCase();
+  if(!q){ if(!selected) clearHighlight(); return; }
+  const hits = new Set(nodes.filter(n=> n.label.toLowerCase().includes(q) || (n.api||"").toLowerCase().includes(q)).map(n=>n.id));
+  node.classed("faded", n=> !hits.has(n.id));
+  link.classed("faded", true);
+  linkLabel.style("opacity",0);
+});
+
+// ---------------- buttons ----------------
+document.getElementById("reset").onclick = (e)=>{
+  e.stopPropagation();
+  document.getElementById("search").value="";
+  selected=null; clearHighlight(); closeDetail();
+  svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity);
+  sim.alpha(0.7).restart();
+};
+let frozen=false;
+const freezeBtn = document.getElementById("freeze");
+freezeBtn.onclick = (e)=>{
+  e.stopPropagation(); frozen=!frozen;
+  freezeBtn.textContent = frozen ? "Unfreeze" : "Freeze";
+  if(frozen){ nodes.forEach(n=>{n.fx=n.x;n.fy=n.y;}); sim.stop(); }
+  else { nodes.forEach(n=>{n.fx=null;n.fy=null;}); sim.alpha(0.5).restart(); }
+};
+
+// ---------------- zoom ----------------
+const zoom = d3.zoom().scaleExtent([0.3, 4]).on("zoom", e=> root.attr("transform", e.transform));
+svg.call(zoom).on("dblclick.zoom", null);
+
+// ---------------- tick ----------------
+sim.on("tick", ()=>{
+  link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)
+      .attr("x2",d=>edgeX(d)).attr("y2",d=>edgeY(d));
+  linkLabel.attr("x",d=>(d.source.x+d.target.x)/2).attr("y",d=>(d.source.y+d.target.y)/2);
+  node.attr("transform", d=>`translate(${d.x},${d.y})`);
+});
+function edgeX(d){ const a=Math.atan2(d.target.y-d.source.y, d.target.x-d.source.x); return d.target.x - Math.cos(a)*(radius(d.target)+7); }
+function edgeY(d){ const a=Math.atan2(d.target.y-d.source.y, d.target.x-d.source.x); return d.target.y - Math.sin(a)*(radius(d.target)+7); }
+
+function dragStart(e,d){ if(!e.active) sim.alphaTarget(0.3).restart(); d.fx=d.x; d.fy=d.y; }
+function dragged(e,d){ d.fx=e.x; d.fy=e.y; }
+function dragEnd(e,d){ if(!e.active) sim.alphaTarget(0); if(!frozen){ d.fx=null; d.fy=null; } }
+
+// ---------------- resize ----------------
+new ResizeObserver(()=>{
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  svg.attr("viewBox",[0,0,W,H]);
+  sim.force("center", d3.forceCenter(W/2,H/2));
+  sim.force("x", d3.forceX(W/2).strength(0.05));
+  sim.force("y", d3.forceY(H/2).strength(0.05));
+  sim.alpha(0.3).restart();
+}).observe(wrap);
+
+// counts
+document.getElementById("s-nodes").textContent = NODES.length;
+document.getElementById("s-links").textContent = LINKS.length;
+</script>
+</body>
+</html>
