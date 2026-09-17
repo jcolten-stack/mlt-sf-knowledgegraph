@@ -277,6 +277,7 @@ const LINKS = [
   { source:"opportunity",          target:"account",             type:"lookup", label:"AccountId" },
   { source:"opportunity",          target:"mlt_program",         type:"lookup", label:"Program__c" },
   { source:"lead",                 target:"contact",             type:"lookup", label:"Contact__c" },
+  { source:"external_application", target:"account_affiliation", type:"lookup", label:"push" },
 
   /* owner (User) relationships */
   { source:"program_enrollment",   target:"user",                type:"lookup", label:"OwnerId" },
